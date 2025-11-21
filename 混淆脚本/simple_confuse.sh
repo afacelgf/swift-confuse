@@ -3,7 +3,7 @@
 # 要忽略的文件夹
 IGNORE_DIRS=("Pods" "thirdLibs" )
 
-# 数组配置文件路径
+# 需要混淆的数组文件
 ARRAYS_FILE="swift_symbols_arrays.sh"
 
 # 文件配置
@@ -14,6 +14,7 @@ CONFUSE_FLAG=".confuseFlag"
 BACKUP_EXTENSION=".bak"
 NOT_REPLACED_FILE=".not_replaced.log"
 FILE_RENAME_MAP=".file_rename_map.log"
+CONTENT_MINI_LENGTH=8 #内容的最小长度
 
 # 输出颜色
 info() { echo -e "[\033[1;32minfo\033[0m] $1"; }
@@ -98,6 +99,35 @@ backupAllSource() {
     done
 }
 
+# 更新 Xcode 项目文件中的文件引用
+updateXcodeProject() {
+    local xcodeproj_path="../Xawa.xcodeproj/project.pbxproj"
+    
+    if [ ! -f "$xcodeproj_path" ]; then
+        info "Xcode project file not found: $xcodeproj_path"
+        return
+    fi
+    
+    info "更新 Xcode 项目文件中的文件引用..."
+    
+    # 备份项目文件
+    cp "$xcodeproj_path" "${xcodeproj_path}.bak"
+    
+    # 读取重命名映射并更新项目文件
+    while IFS=$'\t' read -r old_path new_path; do
+        [[ -z "$old_path" || -z "$new_path" ]] && continue
+        
+        local old_filename=$(basename "$old_path")
+        local new_filename=$(basename "$new_path")
+        
+        # 更新项目文件中的文件名引用
+        sed -i '' "s|${old_filename}|${new_filename}|g" "$xcodeproj_path"
+        
+    done < "$FILE_RENAME_MAP"
+    
+    info "Xcode 项目文件更新完成"
+}
+
 # 重命名 Swift 文件（记录映射，便于恢复）
 renameSwiftFiles() {
     info "开始重命名 Swift 文件..."
@@ -131,6 +161,9 @@ renameSwiftFiles() {
         fi
     done < <(find "${find_args[@]}")
     info "已重命名 $renamed_count 个文件，映射保存在 $FILE_RENAME_MAP"
+    
+    # 更新 Xcode 项目文件
+    updateXcodeProject
 }
 
 confuseOnly() {
@@ -182,6 +215,12 @@ confuseOnly() {
     for symbol in "${ALL_TARGETS[@]}"; do
         # 跳过空字符串和注释行
         [[ -z "$symbol" || "$symbol" =~ ^[[:space:]]*# ]] && continue
+        
+        # 跳过长度小于$CONTENT_MINI_LENGTH的符号
+        if [ ${#symbol} -lt $CONTENT_MINI_LENGTH ]; then
+            info "Skipping symbol '$symbol' (length ${#symbol} < $CONTENT_MINI_LENGTH)"
+            continue
+        fi
         
         rnd=$(randomString)
         echo "$symbol $rnd" >> $SYMBOL_FILE
@@ -359,6 +398,14 @@ unconfuse() {
             fi
         done < "$FILE_RENAME_MAP"
         removeIfExist $FILE_RENAME_MAP
+        
+        # 恢复 Xcode 项目文件
+        local xcodeproj_path="../Xawa.xcodeproj/project.pbxproj"
+        local xcodeproj_backup="${xcodeproj_path}.bak"
+        if [ -f "$xcodeproj_backup" ]; then
+            mv "$xcodeproj_backup" "$xcodeproj_path"
+            info "Xcode 项目文件已恢复"
+        fi
     fi
     if [ -f $BACKUP_FILE ]; then
     cat $BACKUP_FILE | while read backup; do
